@@ -237,7 +237,7 @@ function addDeepPartial(chunks: Code[]): void {
   `);
 }
 
-function addNextIdMethods(chunks: Code[]) : void {
+function addNextIdMethods(chunks: Code[]): void {
   chunks.push(code`
     let nextFactoryIds: Record<string, number> = {};
 
@@ -251,5 +251,4 @@ function addNextIdMethods(chunks: Code[]) : void {
       return String(nextId);
     }
   `);
-
 }
