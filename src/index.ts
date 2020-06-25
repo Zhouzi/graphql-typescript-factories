@@ -14,21 +14,24 @@ import {
 import { PluginFunction, Types } from "@graphql-codegen/plugin-helpers";
 import PluginOutput = Types.PluginOutput;
 
+interface PluginConfig {
+  enumsAsTypes?: boolean;
+}
+
 /** Generates `newProject({ ... })` factory functions in our `graphql-types` codegen output. */
-export const plugin: PluginFunction = async (schema, documents) => {
+export const plugin: PluginFunction<PluginConfig> = async (schema, documents, config) => {
   const chunks: Code[] = [];
-  generateFactoryFunctions(schema, chunks);
+  generateFactoryFunctions(schema, chunks, config);
   generateEnumDetailHelperFunctions(schema, chunks);
-  addDeepPartial(chunks);
   addNextIdMethods(chunks);
   const content = await code`${chunks}`.toStringWithImports();
   return { content } as PluginOutput;
 };
 
-function generateFactoryFunctions(schema: GraphQLSchema, chunks: Code[]) {
-  Object.values(schema.getTypeMap()).forEach(type => {
+function generateFactoryFunctions(schema: GraphQLSchema, chunks: Code[], config: PluginConfig) {
+  Object.values(schema.getTypeMap()).forEach((type) => {
     if (shouldCreateFactory(type)) {
-      chunks.push(newFactory(type));
+      chunks.push(newFactory(type, config));
     }
   });
 }
@@ -38,20 +41,20 @@ function generateEnumDetailHelperFunctions(schema: GraphQLSchema, chunks: Code[]
   const usedEnumDetailTypes = new Set(
     Object.values(schema.getTypeMap())
       .filter(shouldCreateFactory)
-      .flatMap(type => {
+      .flatMap((type) => {
         return Object.values(type.getFields())
-          .map(f => unwrapNotNull(f.type))
+          .map((f) => unwrapNotNull(f.type))
           .filter(isEnumDetailObject);
       }),
   );
 
-  usedEnumDetailTypes.forEach(type => {
+  usedEnumDetailTypes.forEach((type) => {
     const enumType = getRealEnumForEnumDetailObject(type);
     chunks.push(code`
         const enumDetailNameOf${enumType.name} = {
           ${enumType
             .getValues()
-            .map(v => `${v.value}: "${sentenceCase(v.value)}"`)
+            .map((v) => `${v.value}: "${sentenceCase(v.value)}"`)
             .join(", ")}
         };
 
@@ -75,30 +78,32 @@ function generateEnumDetailHelperFunctions(schema: GraphQLSchema, chunks: Code[]
 }
 
 /** Creates a `new${type}` function for the given `type`. */
-function newFactory(type: GraphQLObjectType): Code {
+function newFactory(type: GraphQLObjectType, config: PluginConfig): Code {
   // We want to allow callers to pass in simple enums for our FooEnumDetails pattern,
   // so find those fields and add type unions to the actually-the-enum type.
-  const enumFields = Object.values(type.getFields()).filter(field => isEnumDetailObject(unwrapNotNull(field.type)));
+  const enumFields = Object.values(type.getFields()).filter((field) => isEnumDetailObject(unwrapNotNull(field.type)));
 
   // For each enum field, we allow passing either the enum or enum detail to the factory
-  const enumOverrides = enumFields.map(field => {
+  const enumOverrides = enumFields.map((field) => {
     const realEnumName = getRealEnumForEnumDetailObject(field.type).name;
     const detailName = (unwrapNotNull(field.type) as GraphQLObjectType).name;
     return `{ ${field.name}?: ${realEnumName} | Partial<${detailName}> }`;
   });
 
+  const typeName = pascalCase(type.name);
+
   // Take out the enum fields, and put back in their `enum | enum detail` type unions
   const basePartial =
-    enumFields.length > 0 ? `Omit<${type.name}, ${enumFields.map(f => `"${f.name}"`).join(" | ")}>` : type.name;
+    enumFields.length > 0 ? `Omit<${typeName}, ${enumFields.map((f) => `"${f.name}"`).join(" | ")}>` : typeName;
   const maybeEnumOverrides = enumOverrides.length > 0 ? ["", ...enumOverrides].join(" & ") : "";
 
   return code`
-    export type ${type.name}Options = DeepPartial<${basePartial}> ${maybeEnumOverrides};
+    export type ${typeName}Options = Partial<${basePartial}> ${maybeEnumOverrides};
 
-    export function new${type.name}(options: ${type.name}Options = {}, cache: Record<string, any> = {}): ${type.name} {
-      const o = cache["${type.name}"] = {} as ${type.name};
+    export function new${typeName}(options: ${typeName}Options = {}, cache: Record<string, any> = {}): ${typeName} {
+      const o = cache["${typeName}"] = {} as ${typeName};
       o.__typename = '${type.name}';
-      ${Object.values(type.getFields()).map(f => {
+      ${Object.values(type.getFields()).map((f) => {
         if (f.type instanceof GraphQLNonNull) {
           const fieldType = f.type.ofType;
           if (isEnumDetailObject(fieldType)) {
@@ -122,7 +127,7 @@ function newFactory(type: GraphQLObjectType): Code {
           } else if (fieldType instanceof GraphQLObjectType) {
             return `o.${f.name} = maybeNew${fieldType.name}(options.${f.name}, cache);`;
           } else {
-            return `o.${f.name} = options.${f.name} ?? ${getInitializer(type, f, fieldType)};`;
+            return `o.${f.name} = options.${f.name} ?? ${getInitializer(type, f, fieldType, config)};`;
           }
         } else if (f.type instanceof GraphQLObjectType) {
           return `o.${f.name} = maybeNewOrNull${f.type.name}(options.${f.name}, cache);`;
@@ -133,25 +138,23 @@ function newFactory(type: GraphQLObjectType): Code {
       return o;
     }
     
-    function maybeNew${type.name}(value: ${type.name}Options | undefined, cache: Record<string, any>): ${type.name} {
+    function maybeNew${typeName}(value: ${typeName}Options | undefined, cache: Record<string, any>): ${typeName} {
       if (value === undefined) {
-        return cache["${type.name}"] as ${type.name} ?? new${type.name}({}, cache)
+        return cache["${typeName}"] as ${typeName} ?? new${typeName}({}, cache)
       } else if (value.__typename) {
-        return value as ${type.name};
+        return value as ${typeName};
       } else {
-        return new${type.name}(value, cache);
+        return new${typeName}(value, cache);
       }
     }
     
-    function maybeNewOrNull${type.name}(value: ${type.name}Options | undefined | null, cache: Record<string, any>): ${
-    type.name
-  } | null {
+    function maybeNewOrNull${typeName}(value: ${typeName}Options | undefined | null, cache: Record<string, any>): ${typeName} | null {
       if (!value) {
         return null;
       } else if (value.__typename) {
-        return value as ${type.name};
+        return value as ${typeName};
       } else {
-        return new${type.name}(value, cache);
+        return new${typeName}(value, cache);
       }
     }
     `;
@@ -162,12 +165,15 @@ function getInitializer(
   object: GraphQLObjectType,
   field: GraphQLField<any, any, any>,
   type: GraphQLOutputType,
+  config: PluginConfig,
 ): string {
   if (type instanceof GraphQLList) {
     // We could potentially make a dummy entry in every list, but would we risk infinite loops between parents/children?
     return `[]`;
   } else if (type instanceof GraphQLEnumType) {
-    return `${type.name}.${pascalCase(type.getValues()[0].value)}`;
+    return config.enumsAsTypes
+      ? `"${type.getValues()[0].value}"`
+      : `${type.name}.${pascalCase(type.getValues()[0].value)}`;
   } else if (type instanceof GraphQLScalarType) {
     if (type.name === "Int") {
       return `0`;
@@ -222,22 +228,7 @@ function shouldCreateFactory(type: GraphQLNamedType): type is GraphQLObjectType 
   );
 }
 
-function addDeepPartial(chunks: Code[]): void {
-  chunks.push(code`
-    type Builtin = Date | Function | Uint8Array | string | number | undefined;
-    type DeepPartial<T> = T extends Builtin
-      ? T
-      : T extends Array<infer U>
-      ? Array<DeepPartial<U>>
-      : T extends ReadonlyArray<infer U>
-      ? ReadonlyArray<DeepPartial<U>>
-      : T extends {}
-      ? { [K in keyof T]?: DeepPartial<T[K]> }
-      : Partial<T>;
-  `);
-}
-
-function addNextIdMethods(chunks: Code[]) : void {
+function addNextIdMethods(chunks: Code[]): void {
   chunks.push(code`
     let nextFactoryIds: Record<string, number> = {};
 
@@ -251,5 +242,4 @@ function addNextIdMethods(chunks: Code[]) : void {
       return String(nextId);
     }
   `);
-
 }
