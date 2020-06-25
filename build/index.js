@@ -13,7 +13,7 @@ exports.plugin = async (schema, documents, config) => {
     return { content };
 };
 function generateFactoryFunctions(schema, chunks, config) {
-    Object.values(schema.getTypeMap()).forEach((type) => {
+    Object.values(schema.getTypeMap()).forEach(type => {
         if (shouldCreateFactory(type)) {
             chunks.push(newFactory(type, config));
         }
@@ -23,18 +23,18 @@ function generateFactoryFunctions(schema, chunks, config) {
 function generateEnumDetailHelperFunctions(schema, chunks) {
     const usedEnumDetailTypes = new Set(Object.values(schema.getTypeMap())
         .filter(shouldCreateFactory)
-        .flatMap((type) => {
+        .flatMap(type => {
         return Object.values(type.getFields())
-            .map((f) => unwrapNotNull(f.type))
+            .map(f => unwrapNotNull(f.type))
             .filter(isEnumDetailObject);
     }));
-    usedEnumDetailTypes.forEach((type) => {
+    usedEnumDetailTypes.forEach(type => {
         const enumType = getRealEnumForEnumDetailObject(type);
         chunks.push(ts_poet_1.code `
         const enumDetailNameOf${enumType.name} = {
           ${enumType
             .getValues()
-            .map((v) => `${v.value}: "${change_case_1.sentenceCase(v.value)}"`)
+            .map(v => `${v.value}: "${change_case_1.sentenceCase(v.value)}"`)
             .join(", ")}
         };
 
@@ -58,16 +58,16 @@ function generateEnumDetailHelperFunctions(schema, chunks) {
 function newFactory(type, config) {
     // We want to allow callers to pass in simple enums for our FooEnumDetails pattern,
     // so find those fields and add type unions to the actually-the-enum type.
-    const enumFields = Object.values(type.getFields()).filter((field) => isEnumDetailObject(unwrapNotNull(field.type)));
+    const enumFields = Object.values(type.getFields()).filter(field => isEnumDetailObject(unwrapNotNull(field.type)));
     // For each enum field, we allow passing either the enum or enum detail to the factory
-    const enumOverrides = enumFields.map((field) => {
+    const enumOverrides = enumFields.map(field => {
         const realEnumName = getRealEnumForEnumDetailObject(field.type).name;
         const detailName = unwrapNotNull(field.type).name;
         return `{ ${field.name}?: ${realEnumName} | Partial<${detailName}> }`;
     });
     const typeName = change_case_1.pascalCase(type.name);
     // Take out the enum fields, and put back in their `enum | enum detail` type unions
-    const basePartial = enumFields.length > 0 ? `Omit<${typeName}, ${enumFields.map((f) => `"${f.name}"`).join(" | ")}>` : typeName;
+    const basePartial = enumFields.length > 0 ? `Omit<${typeName}, ${enumFields.map(f => `"${f.name}"`).join(" | ")}>` : typeName;
     const maybeEnumOverrides = enumOverrides.length > 0 ? ["", ...enumOverrides].join(" & ") : "";
     return ts_poet_1.code `
     export type ${typeName}Options = Partial<${basePartial}> ${maybeEnumOverrides};
@@ -75,7 +75,7 @@ function newFactory(type, config) {
     export function new${typeName}(options: ${typeName}Options = {}, cache: Record<string, any> = {}): ${typeName} {
       const o = cache["${typeName}"] = {} as ${typeName};
       o.__typename = '${type.name}';
-      ${Object.values(type.getFields()).map((f) => {
+      ${Object.values(type.getFields()).map(f => {
         if (f.type instanceof graphql_1.GraphQLNonNull) {
             const fieldType = f.type.ofType;
             if (isEnumDetailObject(fieldType)) {
